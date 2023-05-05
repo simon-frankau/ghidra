@@ -18,6 +18,7 @@ package ghidra.app.util.viewer.field;
 import java.awt.Color;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.apache.commons.lang3.StringUtils;
@@ -222,6 +223,45 @@ public class PlateFieldFactory extends FieldFactory {
 	}
 
 	/*
+	 * Group lines in a comment together, for wrapping. Lines are groupable if neither line
+	 * starts with whitespace or is empty. Grouped lines have a space inserted between them
+	 * if there would otherwise be no whitespace between the lines.
+	 */
+	private List<String> groupLines(List<String> comments) {
+		List<String> completeGroups = new ArrayList<>();
+		StringBuffer partialGroup = new StringBuffer();
+
+		for (String string : comments) {
+			if (!partialGroup.isEmpty()) {
+				// Empty lines aren't grouped. Lines that start with
+				// whitespace aren't grouped.
+				if (string.length() > 0 && !Character.isWhitespace(string.charAt(0))) {
+					// Line can be grouped. Insert whitespace if needed.
+					if (!Character.isWhitespace(partialGroup.charAt(partialGroup.length() - 1))
+						&& !Character.isWhitespace(string.charAt(0))) {
+						partialGroup.append(" ");
+					}
+				} else {
+					// Line cannot be grouped. Complete the current group.
+					completeGroups.add(partialGroup.toString());
+					partialGroup.setLength(0);
+				}
+			}
+			// Blank lines create blank lines in output.
+			if (string.isBlank()) {
+				completeGroups.add("");
+			} else {
+				partialGroup.append(string);
+			}
+		}
+
+		if (!partialGroup.isEmpty()) {
+			completeGroups.add(partialGroup.toString());
+		}
+		return completeGroups;
+	}
+
+	/*
 	 * Creates desired FieldElements and puts them in the given list.  Returns true if any of the
 	 * data is clipped because it is too long to display.
 	 */
@@ -240,20 +280,33 @@ public class PlateFieldFactory extends FieldFactory {
 		// add top border
 		elements.add(new TextFieldElement(asteriscs, row++, 0));
 
-		// add and word wrap the comments
-		List<FieldElement> commentsList = new ArrayList<>();
-		for (String c : comments) {
-			commentsList.add(CommentUtils.parseTextForAnnotations(c, p, prototype, row++));
+		// if wrapping, group the comments into wrappable groups.
+		List<String>  commentsList = Arrays.asList(comments);
+		if (isWordWrap) {
+			commentsList = groupLines(commentsList);
 		}
+
+		// convert to FieldElements
+		List<FieldElement> commentElementsList = new ArrayList<>();
+		for (String c : commentsList) {
+			commentElementsList.add(
+				CommentUtils.parseTextForAnnotations(c, p, prototype, row++));
+		}
+
+		// if wrapping, wrap the grouped lines
 		if (isWordWrap) {
 			int charWidth = getMetrics().charWidth(' ');
 			int paddingWidth = CONTENT_PADDING * charWidth;
-			commentsList = FieldUtils.wordWrapList(
-				new CompositeFieldElement(commentsList),
-				Math.max(width - paddingWidth, charWidth));
+			int wrapWidth = Math.max(width - paddingWidth, charWidth);
+			List<FieldElement> wordWrappedList = new ArrayList<>();
+			for (FieldElement element : commentElementsList) {
+				wordWrappedList.addAll(FieldUtils.wordWrapList(element, wrapWidth));
+			}
+			commentElementsList = wordWrappedList;
 		}
-		boolean isClipped = addSideBorders(commentsList);
-		elements.addAll(commentsList);
+
+		boolean isClipped = addSideBorders(commentElementsList);
+		elements.addAll(commentElementsList);
 
 		// add bottom border
 		elements.add(new TextFieldElement(asteriscs, row++, 0));
@@ -529,12 +582,12 @@ public class PlateFieldFactory extends FieldFactory {
 		 	Calculate the data row using the model row provided in the location, along with
 		 	compensating for any spacing and plate comment decorations.   For example, for this
 		 	comment,
-		 	
+
 		 		This is line one
 		 		This is line two
-		 		
+
 		 	the plate comment may look like this
-		 	
+
 		 		(blank line)
 		 		****************************
 		 		* This is line one
